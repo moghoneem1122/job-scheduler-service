@@ -20,4 +20,4 @@ Makefile
 JobScheduler
 external/
 build/
-database/*.db
+database/*.dbexternal/
