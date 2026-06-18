@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    next_run_time TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
