@@ -1,8 +1,9 @@
-CREATE TABLE IF NOT EXISTS jobs (
+CREATE TABLE jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL,
-    status TEXT NOT NULL,
+    name TEXT,
+    type TEXT,
+    status TEXT,
     next_run_time TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    retry_policy INTEGER,
+    retry_count INTEGER
 );
