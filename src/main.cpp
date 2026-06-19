@@ -100,10 +100,10 @@ int main()
             return error("Invalid JSON");
 
         std::string name = body["name"].s();
-        std::string command = body.has("command") ? body["command"].s() : "";
+        std::string command = body.has("command") ? std::string(body["command"].s()) : std::string("");
         std::string type = body["type"].s();
-        std::string nextRunTime = body.has("nextRunTime") ? body["nextRunTime"].s() : "";
-        std::string cronExpression = body.has("cronExpression") ? body["cronExpression"].s() : "";
+        std::string nextRunTime = body.has("nextRunTime") ? std::string(body["nextRunTime"].s()) : std::string("");
+        std::string cronExpression = body.has("cronExpression") ? std::string(body["cronExpression"].s()) : std::string("");
         int intervalSeconds = body.has("intervalSeconds") ? (int)body["intervalSeconds"].i() : 0;
         int retryPolicy = body.has("retryPolicy") ? (int)body["retryPolicy"].i() : 0;
         int retryDelaySeconds = body.has("retryDelaySeconds") ? (int)body["retryDelaySeconds"].i() : 10;
