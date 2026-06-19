@@ -99,9 +99,12 @@ int main()
         if (!body)
             return error("Invalid JSON");
 
-        std::string name = body["name"].s();
+        if (!body.has("name") || !body.has("type"))
+            return error("Missing required fields: 'name' and 'type'");
+
+        std::string name = std::string(body["name"].s());
         std::string command = body.has("command") ? std::string(body["command"].s()) : std::string("");
-        std::string type = body["type"].s();
+        std::string type = std::string(body["type"].s());
         std::string nextRunTime = body.has("nextRunTime") ? std::string(body["nextRunTime"].s()) : std::string("");
         std::string cronExpression = body.has("cronExpression") ? std::string(body["cronExpression"].s()) : std::string("");
         int intervalSeconds = body.has("intervalSeconds") ? (int)body["intervalSeconds"].i() : 0;
