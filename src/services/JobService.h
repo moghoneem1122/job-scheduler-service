@@ -3,6 +3,19 @@
 #include "../utils/Validator.h"
 #include "../utils/Logger.h"
 #include "../utils/TimeManager.h"
+#include <string>
+
+// ============================================================================
+// Pause/Resume/Delete result codes for richer API responses
+// ============================================================================
+
+struct ServiceResult {
+    bool ok = false;
+    std::string message;
+
+    static ServiceResult success(const std::string& msg) { return {true, msg}; }
+    static ServiceResult fail(const std::string& msg) { return {false, msg}; }
+};
 
 class JobService {
 private:
@@ -12,11 +25,13 @@ public:
     JobService(JobRepository r) : repo(r) {}
 
     bool createJob(const std::string& name,
+                   const std::string& command,
                    const std::string& type,
                    const std::string& nextRunTime,
                    const std::string& cronExpression,
                    int intervalSeconds,
-                   int retryPolicy)
+                   int retryPolicy,
+                   int retryDelaySeconds = 10)
     {
         Logger::log(LogLevel::INFO, "createJob: " + name);
 
@@ -28,6 +43,12 @@ public:
 
         if (retryPolicy < 0 || retryPolicy > 10)
             return false;
+
+        if (retryDelaySeconds < 0 || retryDelaySeconds > 3600)
+        {
+            Logger::log(LogLevel::WARN, "retryDelaySeconds must be 0-3600");
+            return false;
+        }
 
         // ============================
         // Compute nextRunTime per type
@@ -104,6 +125,7 @@ public:
 
         Job job;
         job.name = name;
+        job.command = command;
         job.type = type;
         job.status = "active";
         job.nextRunTime = computedNextRun;
@@ -111,6 +133,7 @@ public:
         job.intervalSeconds = intervalSeconds;
         job.retryPolicy = retryPolicy;
         job.retryCount = 0;
+        job.retryDelaySeconds = retryDelaySeconds;
 
         repo.create(job);
 
@@ -128,18 +151,193 @@ public:
         return repo.getById(id);
     }
 
-    bool deleteJob(int id)
+    // ==========================================
+    // DELETE — state-aware deletion
+    //
+    // Running jobs are allowed to be deleted;
+    // the scheduler will detect the missing job
+    // on its next status update and handle it.
+    // Cascading: removes execution logs too.
+    // ==========================================
+    ServiceResult deleteJob(int id)
     {
-        return repo.remove(id);
+        Job job = repo.getById(id);
+        if (job.id == 0)
+            return ServiceResult::fail("Job not found");
+
+        if (job.status == "running")
+        {
+            Logger::log(LogLevel::WARN,
+                "Deleting running job [" + std::to_string(id) + "] — "
+                "current execution will complete but results will be discarded");
+        }
+
+        bool deleted = repo.remove(id);
+        if (!deleted)
+            return ServiceResult::fail("Failed to delete job");
+
+        return ServiceResult::success("Job deleted (status was: " + job.status + ")");
     }
 
-    bool pauseJob(int id)
+    // ==========================================
+    // PAUSE — state-aware
+    //
+    // Valid transitions: active → paused
+    // Invalid: running, completed, failed, already paused
+    // ==========================================
+    ServiceResult pauseJob(int id)
     {
-        return repo.updateStatus(id, "paused");
+        Job job = repo.getById(id);
+        if (job.id == 0)
+            return ServiceResult::fail("Job not found");
+
+        int result = repo.pauseJob(id);
+
+        if (result == 0)
+            return ServiceResult::fail("Job not found");
+        if (result == -1)
+        {
+            // Provide specific error messages per state
+            if (job.status == "paused")
+                return ServiceResult::fail("Job is already paused");
+            if (job.status == "running")
+                return ServiceResult::fail("Cannot pause a running job — wait for it to complete");
+            if (job.status == "completed")
+                return ServiceResult::fail("Cannot pause a completed job");
+            if (job.status == "failed")
+                return ServiceResult::fail("Cannot pause a failed job");
+            return ServiceResult::fail("Cannot pause job in '" + job.status + "' state");
+        }
+
+        return ServiceResult::success("Job paused");
     }
 
-    bool resumeJob(int id)
+    // ==========================================
+    // RESUME — state-aware with time recalculation
+    //
+    // Valid transitions: paused → active
+    // On resume, recalculates nextRunTime if the
+    // scheduled time has passed while paused.
+    // ==========================================
+    ServiceResult resumeJob(int id)
     {
-        return repo.updateStatus(id, "active");
+        Job job = repo.getById(id);
+        if (job.id == 0)
+            return ServiceResult::fail("Job not found");
+
+        int result = repo.resumeJob(id);
+
+        if (result == 0)
+            return ServiceResult::fail("Job not found");
+        if (result == -1)
+        {
+            if (job.status == "active")
+                return ServiceResult::fail("Job is already active");
+            if (job.status == "running")
+                return ServiceResult::fail("Job is currently running");
+            if (job.status == "completed")
+                return ServiceResult::fail("Cannot resume a completed job — create a new one");
+            if (job.status == "failed")
+                return ServiceResult::fail("Cannot resume a failed job — reset retries first");
+            return ServiceResult::fail("Cannot resume job in '" + job.status + "' state");
+        }
+
+        // ==========================================
+        // Smart resume: if nextRunTime is in the past,
+        // recalculate it so the job doesn't fire immediately
+        // for every missed interval during the pause window.
+        // ==========================================
+        std::string recalculated = recalculateNextRunTime(job);
+        if (!recalculated.empty() && recalculated != job.nextRunTime)
+        {
+            repo.updateNextRunTime(id, recalculated);
+            Logger::log(LogLevel::INFO,
+                "Job [" + std::to_string(id) + "] next run recalculated on resume → " + recalculated);
+        }
+
+        // Reset retry count on resume (fresh start)
+        repo.resetRetryCount(id);
+
+        return ServiceResult::success("Job resumed (next run: "
+            + (recalculated.empty() ? job.nextRunTime : recalculated) + ")");
+    }
+
+    // ==========================================
+    // RESET FAILED — re-activate a failed job
+    //
+    // Resets retry count and recalculates nextRunTime
+    // ==========================================
+    ServiceResult resetFailedJob(int id)
+    {
+        Job job = repo.getById(id);
+        if (job.id == 0)
+            return ServiceResult::fail("Job not found");
+
+        if (job.status != "failed")
+            return ServiceResult::fail("Job is not in 'failed' state (current: " + job.status + ")");
+
+        // Reset retry count
+        repo.resetRetryCount(id);
+
+        // Recalculate next run time
+        std::string nextTime = recalculateNextRunTime(job);
+        if (nextTime.empty())
+            return ServiceResult::fail("Cannot compute next run time for this job");
+
+        repo.updateNextRunTime(id, nextTime);
+        repo.updateStatus(id, "active");
+
+        Logger::log(LogLevel::INFO,
+            "Job [" + std::to_string(id) + "] reset from FAILED → active, next run: " + nextTime);
+
+        return ServiceResult::success("Job reset and reactivated (next run: " + nextTime + ")");
+    }
+
+    std::vector<crow::json::wvalue> getExecutionLog(int jobId, int limit = 20)
+    {
+        return repo.getExecutionLog(jobId, limit);
+    }
+
+    // ==========================================
+    // Crash recovery — delegate to repository
+    // ==========================================
+    int recoverRunningJobs()
+    {
+        return repo.recoverRunningJobs();
+    }
+
+private:
+    // ==========================================
+    // Recalculate nextRunTime for a job whose
+    // scheduled time may have passed.
+    // ==========================================
+    std::string recalculateNextRunTime(const Job& job)
+    {
+        // Check if nextRunTime is still in the future
+        std::string futureCheck = TimeManager::computeOnceNext(job.nextRunTime);
+        if (!futureCheck.empty())
+        {
+            // Still in the future — no recalculation needed
+            return job.nextRunTime;
+        }
+
+        // nextRunTime is in the past — recalculate based on type
+        if (job.type == "once")
+        {
+            // One-time jobs can't be recalculated — schedule immediately
+            return TimeManager::now();
+        }
+        else if (job.type == "interval")
+        {
+            // Leap forward to next future interval
+            return TimeManager::computeIntervalNext(job.nextRunTime, job.intervalSeconds);
+        }
+        else if (job.type == "cron")
+        {
+            // Find next cron match from now
+            return TimeManager::computeCronNext(job.cronExpression);
+        }
+
+        return "";
     }
 };
