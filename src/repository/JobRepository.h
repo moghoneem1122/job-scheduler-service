@@ -384,7 +384,8 @@ public:
 
         sqlite3_stmt* stmt;
         std::string sql = std::string("SELECT ") + SELECT_COLS +
-            " FROM jobs WHERE status='active' AND next_run_time <= datetime('now', 'localtime')";
+            " FROM jobs WHERE status='active' "
+            "AND replace(next_run_time, 'T', ' ') <= datetime('now', 'localtime')";
         sqlite3_prepare_v2(db.get(), sql.c_str(), -1, &stmt, nullptr);
 
         std::vector<Job> jobs;
