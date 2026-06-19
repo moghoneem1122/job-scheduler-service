@@ -111,11 +111,16 @@ int main()
         int retryPolicy = body.has("retryPolicy") ? (int)body["retryPolicy"].i() : 0;
         int retryDelaySeconds = body.has("retryDelaySeconds") ? (int)body["retryDelaySeconds"].i() : 10;
 
-        if (!service.createJob(name, command, type, nextRunTime, cronExpression,
-                               intervalSeconds, retryPolicy, retryDelaySeconds))
+        int jobId = service.createJob(name, command, type, nextRunTime, cronExpression,
+                                      intervalSeconds, retryPolicy, retryDelaySeconds);
+        if (jobId == 0)
             return error("Invalid input or validation failed");
 
-        return success("Job created");
+        crow::json::wvalue res;
+        res["status"] = "success";
+        res["message"] = "Job created";
+        res["jobId"] = jobId;
+        return res;
     });
 
     // =========================

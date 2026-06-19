@@ -92,7 +92,7 @@ public:
         return job;
     }
 
-    void create(const Job& job)
+    int create(const Job& job)
     {
         std::lock_guard<std::mutex> lock(db.mutex());
         Logger::log(LogLevel::INFO, "Creating job: " + job.name);
@@ -120,7 +120,9 @@ public:
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
 
-        Logger::log(LogLevel::INFO, "Job created successfully");
+        int newId = (int)sqlite3_last_insert_rowid(db.get());
+        Logger::log(LogLevel::INFO, "Job created successfully with ID: " + std::to_string(newId));
+        return newId;
     }
 
     // ==========================================

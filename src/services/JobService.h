@@ -24,7 +24,7 @@ private:
 public:
     JobService(JobRepository r) : repo(r) {}
 
-    bool createJob(const std::string& name,
+    int createJob(const std::string& name,
                    const std::string& command,
                    const std::string& type,
                    const std::string& nextRunTime,
@@ -36,18 +36,18 @@ public:
         Logger::log(LogLevel::INFO, "createJob: " + name);
 
         if (name.empty() || name.size() > 100)
-            return false;
+            return 0;
 
         if (!isValidJobType(type))
-            return false;
+            return 0;
 
         if (retryPolicy < 0 || retryPolicy > 10)
-            return false;
+            return 0;
 
         if (retryDelaySeconds < 0 || retryDelaySeconds > 3600)
         {
             Logger::log(LogLevel::WARN, "retryDelaySeconds must be 0-3600");
-            return false;
+            return 0;
         }
 
         // ============================
@@ -62,7 +62,7 @@ public:
             if (computedNextRun.empty())
             {
                 Logger::log(LogLevel::WARN, "Once-job scheduled in the past — rejected");
-                return false;
+                return 0;
             }
         }
         else if (type == "interval")
@@ -71,7 +71,7 @@ public:
             if (intervalSeconds <= 0)
             {
                 Logger::log(LogLevel::WARN, "Interval job missing intervalSeconds");
-                return false;
+                return 0;
             }
 
             if (nextRunTime.empty())
@@ -98,7 +98,7 @@ public:
             if (cronExpression.empty())
             {
                 Logger::log(LogLevel::WARN, "Cron job missing cronExpression");
-                return false;
+                return 0;
             }
 
             // Validate cron syntax using the dedicated parser
@@ -107,7 +107,7 @@ public:
             {
                 Logger::log(LogLevel::WARN,
                     "Invalid cron expression: " + cronValidation.errorMessage);
-                return false;
+                return 0;
             }
 
             // Expression is valid — compute next execution time
@@ -116,7 +116,7 @@ public:
             {
                 Logger::log(LogLevel::WARN,
                     "Cron expression has no future match within search window: " + cronExpression);
-                return false;
+                return 0;
             }
 
             Logger::log(LogLevel::INFO,
@@ -135,10 +135,10 @@ public:
         job.retryCount = 0;
         job.retryDelaySeconds = retryDelaySeconds;
 
-        repo.create(job);
+        int id = repo.create(job);
 
         Logger::log(LogLevel::INFO, "Job \"" + name + "\" created — nextRunTime: " + computedNextRun);
-        return true;
+        return id;
     }
 
     std::vector<Job> getJobs()
